@@ -1,6 +1,6 @@
 [package]
 name = "lucide-leptos"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A Lucide icon library package for Leptos applications"
 keywords = ["icons", "lucide", "leptos"]
