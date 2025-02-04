@@ -5,13 +5,17 @@ use std::{
     fs::{self, File},
     io::{self, Write},
     path::Path,
+    process::Command,
     result::Result,
 };
 
 use heck::ToPascalCase;
+use prettyplease::unparse;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
+use rayon::prelude::*;
 use regex::Regex;
+use syn::parse_file;
 use walkdir::WalkDir;
 
 fn main() -> io::Result<()> {
@@ -20,74 +24,80 @@ fn main() -> io::Result<()> {
     let dist = Path::new(&out_dir).join("icons.rs");
     let mut file = File::create(dist)?;
 
-    let features_all = env::var("CARGO_FEATURE_ALL").is_ok();
-    let any_feature_enabled = features_all ||
-        env::vars()
-            .any(|(key, _)| key.starts_with("CARGO_FEATURE_") && key != "CARGO_FEATURE_DEFAULT");
+    check_leptosfmt_installed()?;
 
-    if !any_feature_enabled {
-        return Ok(());
-    }
-
-    writeln!(file, "use leptos::prelude::*;")?;
+    writeln!(file, "use leptos::prelude::*;\n")?;
 
     let regexp = Regex::new(r"(?s)<svg[^>]*>(.*?)</svg>").unwrap();
-    let walkdir = WalkDir::new(icons_dir).into_iter().filter_map(Result::ok);
+    let walkdir = WalkDir::new(icons_dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
 
-    for entry in walkdir {
-        if entry.file_type().is_file() {
-            let path = entry.path();
-            let extension = path.extension().expect("File has no extension");
+    let formatted_codes: Vec<String> = walkdir
+        .par_iter()
+        .filter_map(|entry| {
+            if entry.file_type().is_file() {
+                let path = entry.path();
+                let extension = path.extension()?;
 
-            if extension == "svg" {
-                let file_stem = path.file_stem().unwrap().to_str().unwrap();
-                let feature_name = file_stem.replace('_', "-");
-                let feature_enabled = features_all ||
-                    env::var(format!(
-                        "CARGO_FEATURE_{}",
-                        feature_name.to_uppercase().replace('-', "_")
-                    ))
-                    .is_ok();
+                if extension == "svg" {
+                    let file_stem = path.file_stem()?.to_str()?;
+                    let component_name = format_ident!("{}", file_stem.to_pascal_case());
+                    let svg = fs::read_to_string(path).ok()?;
+                    let svg_children: TokenStream = regexp
+                        .captures(&svg)
+                        .and_then(|captures| captures.get(1))
+                        .map(|m| m.as_str())?
+                        .parse()
+                        .ok()?;
+                    let component_code = generate_component(&component_name, &svg_children);
+                    let component_string = component_code.to_string();
+                    let syntax_tree = parse_file(&component_string).ok()?;
+                    let prettyplease_formatted_code = unparse(&syntax_tree);
 
-                if !feature_enabled {
-                    continue;
+                    let mut child = Command::new("leptosfmt")
+                        .arg("--stdin")
+                        .stdin(std::process::Stdio::piped())
+                        .stdout(std::process::Stdio::piped())
+                        .spawn()
+                        .ok()?;
+
+                    if let Some(mut stdin) = child.stdin.take() {
+                        stdin
+                            .write_all(prettyplease_formatted_code.as_bytes())
+                            .ok()?;
+                    }
+
+                    let output = child.wait_with_output().ok()?;
+                    let formatted_code = String::from_utf8(output.stdout).ok()?;
+
+                    return Some(formatted_code);
                 }
-
-                let component_name = format_ident!("{}", file_stem.to_pascal_case());
-                let svg = fs::read_to_string(path).map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("Failed to read SVG file {}: {}", path.display(), e),
-                    )
-                })?;
-                let svg_children: TokenStream = regexp
-                    .captures(&svg)
-                    .and_then(|captures| captures.get(1))
-                    .map(|m| m.as_str())
-                    .ok_or_else(|| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("Invalid SVG format in file {}", path.display()),
-                        )
-                    })?
-                    .parse()
-                    .map_err(|e| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("Failed to parse SVG content: {e}"),
-                        )
-                    })?;
-                let component_code = generate_component(&component_name, &svg_children);
-
-                writeln!(file, "{component_code}")?;
             }
-        }
+
+            None
+        })
+        .collect();
+
+    for code in formatted_codes {
+        writeln!(file, "{}", code)?;
     }
 
     Ok(())
 }
 
-// FIXME: fix the extra blank space in the generated code
+fn check_leptosfmt_installed() -> io::Result<()> {
+    match Command::new("leptosfmt").arg("--version").output() {
+        Ok(_) => Ok(()),
+        Err(_) =>
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "leptosfmt not found. Please install it with: cargo install leptosfmt",
+            )),
+    }
+}
+
 fn generate_component(
     component_name: &proc_macro2::Ident,
     svg_children: &TokenStream,
