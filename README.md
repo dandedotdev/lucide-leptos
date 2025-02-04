@@ -9,10 +9,8 @@ This is a crate based on [Lucide](https://lucide.dev/) designed for Leptos front
 
 ```toml
 # Cargo.toml
-lucide-leptos = { git = "https://github.com/dandelion-huang/lucide-leptos.git", branch = "main", default-features = false, features = ["arrow-right"] }
+lucide-leptos = { git = "https://github.com/dandelion-huang/lucide-leptos.git", branch = "main" }
 ```
-
-> To improve the performance, specify the features you need.
 
 ## Usage
 
