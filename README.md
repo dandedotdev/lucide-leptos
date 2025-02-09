@@ -5,6 +5,8 @@
 
 This is a crate based on [Lucide](https://lucide.dev/) designed for Leptos front-end applications.
 
+> [leptos-icons](https://github.com/carloskiki/leptos-icons) has a better implementation, and it also contains Lucide icons. I recommend using it!
+
 ## Installation
 
 ```toml
