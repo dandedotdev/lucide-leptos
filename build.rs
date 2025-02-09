@@ -5,7 +5,7 @@ use std::{
     fs::{self, File},
     io::{self, Write},
     path::Path,
-    process::Command,
+    process::{Command, Stdio},
     result::Result,
 };
 
@@ -56,23 +56,7 @@ fn main() -> io::Result<()> {
                     let syntax_tree = parse_file(&component_string).ok()?;
                     let prettyplease_formatted_code = unparse(&syntax_tree);
 
-                    let mut child = Command::new("leptosfmt")
-                        .arg("--stdin")
-                        .stdin(std::process::Stdio::piped())
-                        .stdout(std::process::Stdio::piped())
-                        .spawn()
-                        .ok()?;
-
-                    if let Some(mut stdin) = child.stdin.take() {
-                        stdin
-                            .write_all(prettyplease_formatted_code.as_bytes())
-                            .ok()?;
-                    }
-
-                    let output = child.wait_with_output().ok()?;
-                    let formatted_code = String::from_utf8(output.stdout).ok()?;
-
-                    return Some(formatted_code);
+                    return Some(prettyplease_formatted_code);
                 }
             }
 
@@ -80,9 +64,22 @@ fn main() -> io::Result<()> {
         })
         .collect();
 
-    for code in formatted_codes {
-        writeln!(file, "{}", code)?;
+    let all_code = formatted_codes.join("\n");
+    let mut child = Command::new("leptosfmt")
+        .arg("--stdin")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(all_code.as_bytes())?;
     }
+
+    let output = child.wait_with_output()?;
+    let formatted_code = String::from_utf8(output.stdout)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    writeln!(file, "{}", formatted_code)?;
 
     Ok(())
 }
